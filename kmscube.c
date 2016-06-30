@@ -31,6 +31,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <errno.h>
+#include <stdbool.h>
 
 #include <xf86drm.h>
 #include <xf86drmMode.h>
@@ -172,7 +173,7 @@ static int init_gbm(void)
 	return 0;
 }
 
-static int init_gl(void)
+static int init_gl(bool big_gl)
 {
 	EGLint major, minor, n;
 	GLuint vertex_shader, fragment_shader;
@@ -292,6 +293,16 @@ static int init_gl(void)
 		EGL_NONE
 	};
 
+	static const EGLint config_attribs_gl[] = {
+		EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
+		EGL_RED_SIZE, 1,
+		EGL_GREEN_SIZE, 1,
+		EGL_BLUE_SIZE, 1,
+		EGL_ALPHA_SIZE, 0,
+		EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT,
+		EGL_NONE
+	};
+
 	static const char *vertex_shader_source =
 			"uniform mat4 modelviewMatrix;      \n"
 			"uniform mat4 modelviewprojectionMatrix;\n"
@@ -326,6 +337,14 @@ static int init_gl(void)
 			"    gl_FragColor = vVaryingColor;  \n"
 			"}                                  \n";
 
+	static const char *fragment_shader_source_gl =
+			"varying vec4 vVaryingColor;        \n"
+			"                                   \n"
+			"void main()                        \n"
+			"{                                  \n"
+			"    gl_FragColor = vVaryingColor;  \n"
+			"}                                  \n";
+
 	gl.display = eglGetDisplay(gbm.dev);
 
 	if (!eglInitialize(gl.display, &major, &minor)) {
@@ -340,9 +359,16 @@ static int init_gl(void)
 	printf("EGL Vendor \"%s\"\n", eglQueryString(gl.display, EGL_VENDOR));
 	printf("EGL Extensions \"%s\"\n", eglQueryString(gl.display, EGL_EXTENSIONS));
 
-	if (!eglBindAPI(EGL_OPENGL_ES_API)) {
-		printf("failed to bind api EGL_OPENGL_ES_API\n");
-		return -1;
+	if (big_gl) {
+		if (!eglBindAPI(EGL_OPENGL_API)) {
+			printf("failed to bind api EGL_OPENGL_API\n");
+			return -1;
+		}
+	} else {
+		if (!eglBindAPI(EGL_OPENGL_ES_API)) {
+			printf("failed to bind api EGL_OPENGL_ES_API\n");
+			return -1;
+		}
 	}
 
 	if (!eglChooseConfig(gl.display, config_attribs, &gl.config, 1, &n) || n != 1) {
@@ -389,7 +415,10 @@ static int init_gl(void)
 
 	fragment_shader = glCreateShader(GL_FRAGMENT_SHADER);
 
-	glShaderSource(fragment_shader, 1, &fragment_shader_source, NULL);
+	if (big_gl)
+		glShaderSource(fragment_shader, 1, &fragment_shader_source_gl, NULL);
+	else
+		glShaderSource(fragment_shader, 1, &fragment_shader_source, NULL);
 	glCompileShader(fragment_shader);
 
 	glGetShaderiv(fragment_shader, GL_COMPILE_STATUS, &ret);
@@ -460,6 +489,8 @@ static int init_gl(void)
 	glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 0, (const GLvoid*)gl.colorsoffset);
 	glEnableVertexAttribArray(2);
 
+	printf("Initialized %s on EGL\n", big_gl ? "GL" : "GLES");
+	
 	return 0;
 }
 
@@ -569,7 +600,19 @@ int main(int argc, char *argv[])
 	struct drm_fb *fb;
 	uint32_t i = 0;
 	int ret;
+	bool big_gl = false;
 
+	if (argc > 1) {
+		if (!strcmp(argv[1], "-gl"))
+			big_gl = true;
+		else if (!strcmp(argv[1], "-gles"))
+			big_gl = false;
+		else {
+			printf("Either -gl or -gles?\n");
+			return -1;
+		}
+	}
+	
 	ret = init_drm();
 	if (ret) {
 		printf("failed to initialize DRM\n");
@@ -586,7 +629,7 @@ int main(int argc, char *argv[])
 		return ret;
 	}
 
-	ret = init_gl();
+	ret = init_gl(big_gl);
 	if (ret) {
 		printf("failed to initialize EGL\n");
 		return ret;
